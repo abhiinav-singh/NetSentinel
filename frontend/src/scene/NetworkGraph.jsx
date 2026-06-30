@@ -25,25 +25,39 @@ export default function NetworkGraph({
   // Check for new threats and spawn shockwaves
   const nodesArray = useMemo(() => Array.from(nodes.values()), [nodes]);
 
-  // Spawn shockwaves for newly-threatened nodes
+  // Threat-state → ring color (mirrors NetworkNode's palette exactly)
+  const threatColor = useCallback((state) => {
+    if (state === 'critical') return '#FF3B30';
+    if (state === 'medium')   return '#D9A441';
+    return '#39FF88';
+  }, []);
+
+  // Spawn shockwaves for newly-threatened nodes (critical + medium)
   useMemo(() => {
     nodesArray.forEach((node) => {
-      if (
-        node.threatState === 'critical' &&
-        node.threatTimestamp &&
-        !firedShockwaves.has(node.id + '-' + node.threatTimestamp)
-      ) {
-        firedShockwaves.add(node.id + '-' + node.threatTimestamp);
+      const isThreat =
+        (node.threatState === 'critical' || node.threatState === 'medium') &&
+        node.threatTimestamp;
+      const key = node.id + '-' + node.threatTimestamp;
+
+      if (isThreat && !firedShockwaves.has(key)) {
+        firedShockwaves.add(key);
+        // nodeRadius mirrors NetworkNode size logic
+        const nodeRadius =
+          node.type === 'router' ? 0.35 : node.type === 'external' ? 0.4 : 0.25;
+
         setShockwaves((prev) => [
           ...prev,
           {
-            id: node.id + '-' + node.threatTimestamp,
+            id: key,
             position: [...node.position],
+            color: threatColor(node.threatState),
+            nodeRadius,
           },
         ]);
       }
     });
-  }, [nodesArray, firedShockwaves]);
+  }, [nodesArray, firedShockwaves, threatColor]);
 
   const removeShockwave = useCallback((id) => {
     setShockwaves((prev) => prev.filter((sw) => sw.id !== id));
@@ -110,6 +124,8 @@ export default function NetworkGraph({
         <ShockwaveRing
           key={sw.id}
           position={sw.position}
+          color={sw.color}
+          nodeRadius={sw.nodeRadius}
           reducedMotion={reducedMotion}
           onComplete={() => removeShockwave(sw.id)}
         />

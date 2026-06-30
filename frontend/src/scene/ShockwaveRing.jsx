@@ -1,62 +1,131 @@
-import { useRef, useState, useEffect } from 'react';
+import { useRef, useState } from 'react';
 import { useFrame } from '@react-three/fiber';
 import * as THREE from 'three';
 
 /**
- * Expanding shockwave ring effect.
- * Spawns at a node's position when a threat is detected.
- * Scales up and fades out over ~800ms, then auto-removes.
+ * A single expanding ring within the shockwave burst.
+ * Starts invisible until `delay` seconds have elapsed, then
+ * expands from nodeRadius to ~4.5× nodeRadius with ease-out
+ * opacity fade, using additive blending for a glowing energy look.
  */
-export default function ShockwaveRing({ position, onComplete, reducedMotion = false }) {
-  const ringRef = useRef();
-  const materialRef = useRef();
-  const [alive, setAlive] = useState(true);
-  const progress = useRef(0);
+function ShockwaveRingLayer({ position, color, delay, duration, nodeRadius, onComplete }) {
+  const meshRef = useRef();
+  const matRef = useRef();
+  const elapsed = useRef(0);
+  const done = useRef(false);
 
   useFrame((_, delta) => {
-    if (!alive || !ringRef.current || !materialRef.current) return;
+    if (done.current) return;
 
-    if (reducedMotion) {
-      // Instant flash then remove
-      setAlive(false);
-      onComplete?.();
-      return;
-    }
+    elapsed.current += delta;
 
-    // Animate over ~800ms
-    progress.current += delta / 0.8;
+    // Wait for the stagger delay before becoming active
+    const active = elapsed.current - delay;
+    if (active < 0) return;
 
-    if (progress.current >= 1) {
-      setAlive(false);
-      onComplete?.();
-      return;
-    }
-
-    const t = progress.current;
-    // Ease out cubic
+    const t = Math.min(active / duration, 1);
+    // Ease-out cubic — expands fast, slows near end (physical shockwave feel)
     const eased = 1 - Math.pow(1 - t, 3);
 
-    // Scale from 0.1 to 4
-    const scale = 0.1 + eased * 3.9;
-    ringRef.current.scale.set(scale, scale, scale);
+    if (meshRef.current) {
+      // Scale from nodeRadius to 4.5× nodeRadius
+      const scale = nodeRadius + eased * nodeRadius * 3.5;
+      meshRef.current.scale.setScalar(scale);
+    }
 
-    // Fade opacity
-    materialRef.current.opacity = 1 - eased;
+    if (matRef.current) {
+      // Opacity 1 → 0 as it expands
+      matRef.current.opacity = (1 - eased) * 0.9;
+    }
+
+    if (t >= 1 && !done.current) {
+      done.current = true;
+      onComplete?.();
+    }
   });
 
-  if (!alive) return null;
-
   return (
-    <mesh ref={ringRef} position={position} rotation={[-Math.PI / 2, 0, 0]}>
-      <torusGeometry args={[1, 0.02, 8, 64]} />
+    <mesh ref={meshRef} position={position} rotation={[-Math.PI / 2, 0, 0]}>
+      {/*
+        innerRadius=1, outerRadius=1.045 → thin outline ring when scaled.
+        thetaSegments=96 for a smooth circle.
+      */}
+      <ringGeometry args={[1, 1.045, 96]} />
       <meshBasicMaterial
-        ref={materialRef}
-        color="#FF3B30"
+        ref={matRef}
+        color={color}
         transparent
-        opacity={1}
+        opacity={0.9}
         side={THREE.DoubleSide}
         depthWrite={false}
+        blending={THREE.AdditiveBlending}
       />
     </mesh>
+  );
+}
+
+// -------------------------------------------------------------------
+// Ring config: 3 rings staggered by 150ms, each lasting ~0.9s.
+// Total burst window: 0 + 0.9 = 0.9s for ring 1,
+//                    0.15 + 0.9 = 1.05s for ring 2,
+//                    0.30 + 0.9 = 1.20s for ring 3.
+const RING_CONFIGS = [
+  { delay: 0,    duration: 0.9 },
+  { delay: 0.15, duration: 0.9 },
+  { delay: 0.30, duration: 0.9 },
+];
+
+/**
+ * Multi-ring expanding shockwave burst.
+ *
+ * Props:
+ *   position      – [x, y, z] world position of the node
+ *   color         – hex string matching the node's current threat color
+ *   nodeRadius    – base radius of the node mesh (controls ring start size)
+ *   onComplete    – called once ALL rings have finished (for parent cleanup)
+ *   reducedMotion – if true, skips animation and immediately signals completion
+ */
+export default function ShockwaveRing({
+  position,
+  color = '#FF3B30',
+  nodeRadius = 0.25,
+  onComplete,
+  reducedMotion = false,
+}) {
+  const [completedCount, setCompletedCount] = useState(0);
+  const total = RING_CONFIGS.length;
+
+  // prefers-reduced-motion: skip entirely, just signal completion
+  if (reducedMotion) {
+    onComplete?.();
+    return null;
+  }
+
+  // Once every ring has called back, remove the whole burst
+  const handleLayerComplete = () => {
+    setCompletedCount((prev) => {
+      const next = prev + 1;
+      if (next >= total) onComplete?.();
+      return next;
+    });
+  };
+
+  // After all rings done, render nothing (parent will also remove us via onComplete)
+  if (completedCount >= total) return null;
+
+  return (
+    <>
+      {RING_CONFIGS.map((cfg, i) => (
+        <ShockwaveRingLayer
+          key={i}
+          position={position}
+          color={color}
+          delay={cfg.delay}
+          duration={cfg.duration}
+          nodeRadius={nodeRadius}
+          onComplete={handleLayerComplete}
+        />
+      ))}
+    </>
   );
 }
