@@ -137,6 +137,15 @@ export function useNetworkSocket() {
             next.set(data.source_node, sourceNode);
           }
 
+          // Mark target node as threat (handles external/unknown attackers
+          // whose source node is not in the node map)
+          if (next.has(data.target_node)) {
+            const targetNode = { ...next.get(data.target_node) };
+            targetNode.threatState = severity;
+            targetNode.threatTimestamp = Date.now();
+            next.set(data.target_node, targetNode);
+          }
+
           return next;
         });
 
